@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pharma Market Share EV Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #5c6b8a;
+      --panel: rgba(255, 255, 255, 0.08);
+      --accent: #0ea5e9;
+      --accent-2: #a855f7;
+      --bg: radial-gradient(circle at 20% 20%, rgba(14,165,233,0.2), transparent 35%),
+             radial-gradient(circle at 80% 0%, rgba(168,85,247,0.2), transparent 30%),
+             #0b1220;
+      --card: rgba(255,255,255,0.06);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: 'Space Grotesk', 'Helvetica Neue', sans-serif;
+      background: var(--bg);
+      color: #e5e7eb;
+      min-height: 100vh;
+    }
+    a { color: var(--accent); }
+    .page {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 20px 60px;
+    }
+    .hero {
+      background: linear-gradient(135deg, rgba(14,165,233,0.14), rgba(168,85,247,0.16));
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 20px;
+      padding: 28px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 14px 50px rgba(0,0,0,0.28);
+    }
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: 32px;
+      letter-spacing: -0.02em;
+    }
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-top: 20px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    .card h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    input[type="number"],
+    input[type="date"] {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: #f8fafc;
+      font-size: 14px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      background: rgba(255,255,255,0.06);
+      box-shadow: 0 0 0 3px rgba(14,165,233,0.15);
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 26px 0 18px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 12px 18px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+      color: #0b1220;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      box-shadow: 0 10px 25px rgba(14,165,233,0.25);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    button:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(14,165,233,0.35); }
+    button:active { transform: translateY(0); }
+    .status {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .ev-card {
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .ev-value {
+      font-size: 26px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .ev-note { color: var(--muted); font-size: 13px; }
+    .scenario-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .scenario-card {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.03);
+    }
+    .scenario-card h4 {
+      margin: 0 0 4px;
+      font-size: 15px;
+      color: #f8fafc;
+    }
+    .scenario-card .meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .plot-area {
+      margin-top: 22px;
+      background: var(--card);
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 12px;
+    }
+    .plot-area h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      color: #f8fafc;
+    }
+    #plot {
+      width: 100%;
+      display: block;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.05);
+      min-height: 260px;
+    }
+    .pill {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #0b1220;
+    }
+    .pill.a { background: #5f4b8b; color: #f8fafc; }
+    .pill.b { background: #3c9d9b; color: #041620; }
+    .pill.c { background: #e67300; color: #0b1220; }
+    @media (max-width: 720px) {
+      .hero h1 { font-size: 26px; }
+      .ev-value { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>Market Share EV with WebR</h1>
+      <p>Model three candidate drugs, each with a success probability, release date, and patent expiry. We assume successful entrants share market value equally while overlapping, and all branded share stops at the first successful patent expiry.</p>
+    </section>
+
+    <div class="grid" id="companyInputs">
+      <div class="card" data-company="A">
+        <h3>Company A <span class="pill a">A</span></h3>
+        <label>Success probability (0-1)</label>
+        <input type="number" min="0" max="1" step="0.01" value="0.7" data-field="prob">
+        <label>Release date</label>
+        <input type="date" value="2026-06-01" data-field="release">
+        <label>Patent expiry</label>
+        <input type="date" value="2036-06-01" data-field="expiry">
+      </div>
+      <div class="card" data-company="B">
+        <h3>Company B <span class="pill b">B</span></h3>
+        <label>Success probability (0-1)</label>
+        <input type="number" min="0" max="1" step="0.01" value="0.55" data-field="prob">
+        <label>Release date</label>
+        <input type="date" value="2027-01-15" data-field="release">
+        <label>Patent expiry</label>
+        <input type="date" value="2034-12-31" data-field="expiry">
+      </div>
+      <div class="card" data-company="C">
+        <h3>Company C <span class="pill c">C</span></h3>
+        <label>Success probability (0-1)</label>
+        <input type="number" min="0" max="1" step="0.01" value="0.45" data-field="prob">
+        <label>Release date</label>
+        <input type="date" value="2025-10-01" data-field="release">
+        <label>Patent expiry</label>
+        <input type="date" value="2033-05-20" data-field="expiry">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="run">Compute EV &amp; Scenarios</button>
+      <span class="status" id="status">WebR loading…</span>
+    </div>
+
+    <div class="ev-card">
+      <div class="ev-value" id="evValue">—</div>
+      <div class="ev-note">Expected market share for Company A (share-days, weighted by probabilities). Also shown in years for intuition.</div>
+    </div>
+
+    <div class="scenario-list" id="scenarioList"></div>
+
+    <div class="plot-area">
+      <h3>All market share timelines</h3>
+      <img id="plot" alt="Scenario plot generated in R via WebR" />
+    </div>
+  </div>
+
+  <script type="module">
+    import { WebR } from "https://webr.r-wasm.org/latest/webr.mjs";
+
+    const statusEl = document.getElementById('status');
+    const evEl = document.getElementById('evValue');
+    const scenarioList = document.getElementById('scenarioList');
+    const plotEl = document.getElementById('plot');
+    const runBtn = document.getElementById('run');
+
+    const webR = new WebR();
+    const shelter = new webR.RCodeShelter();
+
+    const setStatus = (msg) => statusEl.textContent = msg;
+
+    const bootstrapR = `
+      calc_scenario <- function(success_vec, p, release, expiry) {
+        prob <- prod(ifelse(success_vec == 1, p, 1 - p))
+        successes <- which(success_vec == 1)
+        if (length(successes) == 0) {
+          return(list(label = "No successes", probability = prob, ev1 = 0, segments = data.frame()))
+        }
+        end_time <- min(expiry[successes])
+        active_releases <- release[successes]
+        eligible <- active_releases <= end_time
+        successes <- successes[eligible]
+        if (length(successes) == 0) {
+          return(list(label = "No window", probability = prob, ev1 = 0, segments = data.frame()))
+        }
+        end_time <- min(expiry[successes])
+        times <- sort(unique(c(active_releases[eligible], end_time)))
+        segments <- data.frame(company = integer(), start = as.Date(character()), end = as.Date(character()), share = double())
+        ev1 <- 0
+        for (i in seq_len(length(times) - 1)) {
+          start <- times[i]
+          stop <- times[i + 1]
+          if (start >= end_time) next
+          active <- successes[release[successes] <= start]
+          if (length(active) == 0) next
+          share <- 1 / length(active)
+          dur <- as.numeric(difftime(stop, start, units = "days"))
+          for (comp in active) {
+            segments <- rbind(segments, data.frame(company = comp, start = start, end = stop, share = share))
+            if (comp == 1) ev1 <- ev1 + share * dur
+          }
+        }
+        label <- paste(c("A", "B", "C")[successes], collapse = "+")
+        list(label = label, probability = prob, ev1 = ev1, segments = segments)
+      }
+
+      compute_scenarios <- function(p, release, expiry) {
+        combos <- expand.grid(A = c(0, 1), B = c(0, 1), C = c(0, 1))
+        scenario_list <- list()
+        total_ev <- 0
+        for (i in seq_len(nrow(combos))) {
+          success_vec <- as.integer(unlist(combos[i, ]))
+          scenario <- calc_scenario(success_vec, p, release, expiry)
+          scenario$probability <- scenario$probability
+          total_ev <- total_ev + scenario$probability * scenario$ev1
+          scenario_list[[length(scenario_list) + 1]] <- scenario
+        }
+        list(expected_ev = total_ev, scenarios = scenario_list)
+      }
+
+      serialize_payload <- function(payload) {
+        scenarios <- lapply(payload$scenarios, function(sc) {
+          segments <- list()
+          if (nrow(sc$segments) > 0) {
+            segments <- lapply(seq_len(nrow(sc$segments)), function(i) {
+              list(
+                company = sc$segments$company[i],
+                start = as.character(sc$segments$start[i]),
+                end = as.character(sc$segments$end[i]),
+                share = sc$segments$share[i]
+              )
+            })
+          }
+          list(
+            label = sc$label,
+            probability = sc$probability,
+            ev1 = sc$ev1,
+            segments = segments
+          )
+        })
+        list(
+          expected_ev = payload$expected_ev,
+          expected_years = payload$expected_ev / 365,
+          scenarios = scenarios
+        )
+      }
+
+      plot_scenarios <- function(payload) {
+        scenarios <- payload$scenarios
+        valid <- Filter(function(x) nrow(x$segments) > 0, scenarios)
+        if (length(valid) == 0) {
+          plot.new()
+          text(0.5, 0.5, "No market activity", cex = 1.2)
+          return(invisible(NULL))
+        }
+        cols <- c("#5f4b8b", "#3c9d9b", "#e67300")
+        n <- length(valid)
+        rows <- ceiling(n / 2)
+        par(mfrow = c(rows, 2), mar = c(3.1, 3.4, 2.4, 1.2), mgp = c(1.9, 0.6, 0))
+        for (sc in valid) {
+          segs <- sc$segments
+          xlim <- range(c(segs$start, segs$end))
+          plot(xlim, c(0, 1), type = "n", xlab = "Date", ylab = "Share", main = paste0(sc$label, " (p=", sprintf("%.2f", sc$probability), ")"))
+          abline(h = 0, col = "#e5e7eb40")
+          for (comp in 1:3) {
+            segc <- segs[segs$company == comp, ]
+            if (nrow(segc) == 0) next
+            for (j in seq_len(nrow(segc))) {
+              lines(x = c(segc$start[j], segc$end[j]), y = c(segc$share[j], segc$share[j]), col = cols[comp], lwd = 3)
+            }
+          }
+        }
+      }
+    `;
+
+    const initWebR = async () => {
+      setStatus('Starting WebR…');
+      await webR.init();
+      await webR.evalRVoid(bootstrapR);
+      setStatus('Ready');
+    };
+
+    const readInputs = () => {
+      const cards = Array.from(document.querySelectorAll('[data-company]'));
+      const probs = [];
+      const releases = [];
+      const expiries = [];
+      for (const card of cards) {
+        const prob = parseFloat(card.querySelector('[data-field="prob"]').value);
+        const rel = card.querySelector('[data-field="release"]').value;
+        const exp = card.querySelector('[data-field="expiry"]').value;
+        probs.push(prob);
+        releases.push(rel);
+        expiries.push(exp);
+      }
+      return { probs, releases, expiries };
+    };
+
+    const renderScenarios = (scenarios) => {
+      scenarioList.innerHTML = '';
+      scenarios.forEach((sc) => {
+        const card = document.createElement('div');
+        card.className = 'scenario-card';
+        const prob = (sc.probability * 100).toFixed(1);
+        const evText = sc.ev1.toFixed(1);
+        card.innerHTML = `
+          <h4>${sc.label}</h4>
+          <div class="meta">Probability: ${prob}% · Company A share: ${evText} share-days</div>
+          <div class="meta">Segments: ${sc.segments.length}</div>
+        `;
+        scenarioList.appendChild(card);
+      });
+    };
+
+    const runModel = async () => {
+      const { probs, releases, expiries } = readInputs();
+      if (probs.some(p => isNaN(p) || p < 0 || p > 1)) {
+        setStatus('Probabilities must be between 0 and 1.');
+        return;
+      }
+      if (releases.some(d => !d) || expiries.some(d => !d)) {
+        setStatus('Please provide all dates.');
+        return;
+      }
+      setStatus('Running in WebR…');
+      runBtn.disabled = true;
+
+      const rCode = `
+        p <- c(${probs.join(",")})
+        release <- as.Date(c(${releases.map(d => `"${d}"`).join(",")}))
+        expiry <- as.Date(c(${expiries.map(d => `"${d}"`).join(",")}))
+        payload <- compute_scenarios(p, release, expiry)
+        serialize_payload(payload)
+      `;
+
+      const payload = await shelter.evalR(rCode);
+      const jsData = await payload.toJs();
+
+      evEl.textContent = \`\${jsData.expected_ev.toFixed(1)} share-days (\${jsData.expected_years.toFixed(2)} years)\`;
+      renderScenarios(jsData.scenarios);
+
+      const plotCode = `
+        p <- c(${probs.join(",")})
+        release <- as.Date(c(${releases.map(d => `"${d}"`).join(",")}))
+        expiry <- as.Date(c(${expiries.map(d => `"${d}"`).join(",")}))
+        payload <- compute_scenarios(p, release, expiry)
+        plot_scenarios(payload)
+      `;
+
+      const plot = await shelter.captureRPlot(plotCode);
+      const plotBlob = await plot.toBlob();
+      const plotUrl = URL.createObjectURL(plotBlob);
+      plotEl.src = plotUrl;
+
+      setStatus('Updated');
+      runBtn.disabled = false;
+    };
+
+    runBtn.addEventListener('click', runModel);
+    initWebR();
+  </script>
+</body>
+</html>
