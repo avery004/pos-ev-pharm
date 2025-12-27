@@ -222,30 +222,48 @@
     <div class="grid" id="companyInputs">
       <div class="card" data-company="A">
         <h3>Company A <span class="pill a">A</span></h3>
-        <label>Success probability (0-1)</label>
-        <input type="number" min="0" max="1" step="0.01" value="0.7" data-field="prob">
-        <label>Release date</label>
-        <input type="date" value="2026-06-01" data-field="release">
-        <label>Patent expiry</label>
-        <input type="date" value="2036-06-01" data-field="expiry">
+        <label for="prob-A">Success probability (0-1)</label>
+        <input id="prob-A" name="prob-A" type="number" min="0" max="1" step="0.01" value="0.7" data-field="prob">
+        <label for="conf-A">Confidence</label>
+        <select id="conf-A" name="conf-A" data-field="confidence" data-company="A">
+          <option value="high">High (0.01)</option>
+          <option value="medium">Medium (0.05)</option>
+          <option value="low">Low (0.20)</option>
+        </select>
+        <label for="rel-A">Release date</label>
+        <input id="rel-A" name="rel-A" type="date" value="2026-06-01" data-field="release">
+        <label for="exp-A">Patent expiry</label>
+        <input id="exp-A" name="exp-A" type="date" value="2036-06-01" data-field="expiry">
       </div>
       <div class="card" data-company="B">
         <h3>Company B <span class="pill b">B</span></h3>
-        <label>Success probability (0-1)</label>
-        <input type="number" min="0" max="1" step="0.01" value="0.55" data-field="prob">
-        <label>Release date</label>
-        <input type="date" value="2027-01-15" data-field="release">
-        <label>Patent expiry</label>
-        <input type="date" value="2034-12-31" data-field="expiry">
+        <label for="prob-B">Success probability (0-1)</label>
+        <input id="prob-B" name="prob-B" type="number" min="0" max="1" step="0.01" value="0.55" data-field="prob">
+        <label for="conf-B">Confidence</label>
+        <select id="conf-B" name="conf-B" data-field="confidence" data-company="B">
+          <option value="high">High (0.01)</option>
+          <option value="medium" selected>Medium (0.05)</option>
+          <option value="low">Low (0.20)</option>
+        </select>
+        <label for="rel-B">Release date</label>
+        <input id="rel-B" name="rel-B" type="date" value="2027-01-15" data-field="release">
+        <label for="exp-B">Patent expiry</label>
+        <input id="exp-B" name="exp-B" type="date" value="2034-12-31" data-field="expiry">
       </div>
       <div class="card" data-company="C">
         <h3>Company C <span class="pill c">C</span></h3>
-        <label>Success probability (0-1)</label>
-        <input type="number" min="0" max="1" step="0.01" value="0.45" data-field="prob">
-        <label>Release date</label>
-        <input type="date" value="2025-10-01" data-field="release">
-        <label>Patent expiry</label>
-        <input type="date" value="2033-05-20" data-field="expiry">
+        <label for="prob-C">Success probability (0-1)</label>
+        <input id="prob-C" name="prob-C" type="number" min="0" max="1" step="0.01" value="0.45" data-field="prob">
+        <label for="conf-C">Confidence</label>
+        <select id="conf-C" name="conf-C" data-field="confidence" data-company="C">
+          <option value="high">High (0.01)</option>
+          <option value="medium">Medium (0.05)</option>
+          <option value="low" selected>Low (0.20)</option>
+        </select>
+        <label for="rel-C">Release date</label>
+        <input id="rel-C" name="rel-C" type="date" value="2025-10-01" data-field="release">
+        <label for="exp-C">Patent expiry</label>
+        <input id="exp-C" name="exp-C" type="date" value="2033-05-20" data-field="expiry">
       </div>
     </div>
 
@@ -342,6 +360,28 @@
         list(expected_ev = total_ev, scenarios = scenario_list)
       }
 
+      beta_params_from_mean_var <- function(m, v) {
+        m <- pmin(pmax(m, 1e-6), 1 - 1e-6)
+        max_var <- m * (1 - m)
+        adj_v <- ifelse(v >= max_var, max_var * 0.999, v)
+        t <- m * (1 - m) / adj_v - 1
+        alpha <- m * t
+        beta <- (1 - m) * t
+        list(alpha = alpha, beta = beta, variance = adj_v, mean = m)
+      }
+
+      simulate_ev <- function(p_mean, v, release, expiry, n = 300) {
+        ab <- beta_params_from_mean_var(p_mean, v)
+        evs <- numeric(n)
+        for (i in seq_len(n)) {
+          p <- stats::rbeta(length(p_mean), ab$alpha, ab$beta)
+          payload <- compute_scenarios(p, release, expiry)
+          evs[i] <- payload$expected_ev
+        }
+        ci <- as.numeric(stats::quantile(evs, c(0.025, 0.975)))
+        list(alpha = ab$alpha, beta = ab$beta, variance = ab$variance, mean = ab$mean, ci = ci, ev_samples = evs)
+      }
+
       serialize_payload <- function(payload) {
         scenarios <- lapply(payload$scenarios, function(sc) {
           segments <- list()
@@ -365,7 +405,13 @@
         list(
           expected_ev = payload$expected_ev,
           expected_years = payload$expected_ev / 365,
-          scenarios = scenarios
+          scenarios = scenarios,
+          alpha = payload$alpha,
+          beta = payload$beta,
+          variance = payload$variance,
+          mean = payload$mean,
+          ci = payload$ci,
+          ev_samples = payload$ev_samples
         )
       }
 
@@ -529,26 +575,41 @@
     };
 
     const readInputs = () => {
-      const cards = Array.from(document.querySelectorAll('[data-company]'));
+      const cards = Array.from(document.querySelectorAll('.card[data-company]'));
       const probs = [];
       const releases = [];
       const expiries = [];
+      const cvs = [];
       for (const card of cards) {
-        const prob = parseFloat(card.querySelector('[data-field="prob"]').value);
-        const rel = card.querySelector('[data-field="release"]').value;
-        const exp = card.querySelector('[data-field="expiry"]').value;
+        const probEl = card.querySelector('[data-field="prob"]');
+        const relEl = card.querySelector('[data-field="release"]');
+        const expEl = card.querySelector('[data-field="expiry"]');
+        const confEl = card.querySelector('[data-field="confidence"]');
+        if (!probEl || !relEl || !expEl || !confEl) {
+          throw new Error('Missing input elements for company card');
+        }
+        const prob = parseFloat(probEl.value);
+        const rel = relEl.value;
+        const exp = expEl.value;
+        const conf = confEl.value;
+        let cv;
+        if (conf === 'high') cv = 0.01;
+        else if (conf === 'medium') cv = 0.05;
+        else if (conf === 'low') cv = 0.2;
+        else cv = 0.05;
         probs.push(prob);
         releases.push(rel);
         expiries.push(exp);
+        cvs.push(cv);
       }
-      return { probs, releases, expiries };
+      return { probs, releases, expiries, cvs };
     };
 
-    const renderScenarios = (scenarios, maxShareDays) => {
-      scenarioList.innerHTML = '';
-      const norm = maxShareDays > 0 ? maxShareDays : 1;
-      scenarios.forEach((sc) => {
-        const card = document.createElement('div');
+      const renderScenarios = (scenarios, maxShareDays) => {
+        scenarioList.innerHTML = '';
+        const norm = maxShareDays > 0 ? maxShareDays : 1;
+        scenarios.forEach((sc) => {
+          const card = document.createElement('div');
         card.className = 'scenario-card';
         const prob = (sc.probability * 100).toFixed(1);
         const pct = ((sc.ev1 / norm) * 100).toFixed(1);
@@ -558,6 +619,180 @@
         `;
         scenarioList.appendChild(card);
       });
+    };
+
+    const renderSimulationPlot = (evSamples, maxShareDays, pathSamples, releases, expiries) => {
+      const canvas = simPlotEl;
+      const ctx = canvas.getContext('2d');
+      const width = canvas.clientWidth || 900;
+      const height = 320;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#0c1020';
+      ctx.fillRect(0, 0, width, height);
+
+        const normalizePath = (p) => {
+          if (!p) return [];
+          if (Array.isArray(p)) {
+            if (p.length > 0 && typeof p[0] === 'object' && 'company' in p[0]) return p;
+            return p;
+          }
+          if (typeof p === 'object') {
+            if (p.company && p.start && p.end && p.share) {
+              const len = Math.min(p.company.length || 0, p.start.length || 0, p.end.length || 0, p.share.length || 0);
+              return Array.from({ length: len }, (_, i) => ({
+                company: p.company[i],
+                start: p.start[i],
+                end: p.end[i],
+                share: p.share[i],
+                weight: p.weight ? p.weight[i] : undefined
+              }));
+            }
+            if (p.start && p.end && p.share && Array.isArray(p.start)) {
+              const len = Math.min(p.start.length, p.end.length, p.share.length);
+              return Array.from({ length: len }, (_, i) => ({
+                company: p.company && p.company[i] ? p.company[i] : 1,
+                start: p.start[i],
+                end: p.end[i],
+                share: p.share[i],
+                weight: p.weight ? p.weight[i] : undefined
+              }));
+            }
+          }
+          return [];
+        };
+
+      console.log('renderSimulationPlot: raw pathSamples', pathSamples);
+      const normalizedPaths = [];
+      (pathSamples || []).forEach(p => {
+        const n = normalizePath(p);
+        if (n.length > 0) normalizedPaths.push(n);
+      });
+      console.log('renderSimulationPlot: normalizedPaths length', normalizedPaths.length);
+
+      if (normalizedPaths.length === 0) {
+        ctx.fillStyle = '#e5e7eb';
+        ctx.fillText('No simulation path data', 12, 20);
+        return;
+      }
+
+      const colors = ['#5f4b8b', '#3c9d9b', '#e67300'];
+      const padX = 60;
+      const padTop = 32;
+      const padBottom = 40;
+      const yZero = height - padBottom;
+      const yRange = height - padTop - padBottom;
+      const toMs = (d) => {
+        if (d === null || d === undefined) return null;
+        if (typeof d === 'number') {
+          const days = d;
+          const ms = days * 86400000;
+          if (Number.isFinite(ms)) return ms;
+        }
+        const t = new Date(d).getTime();
+        if (Number.isFinite(t)) return t;
+        const asNum = Number(d);
+        if (Number.isFinite(asNum)) {
+          const ms2 = asNum * 86400000;
+          if (Number.isFinite(ms2)) return ms2;
+        }
+        console.warn('Invalid date encountered in spaghetti plot', d);
+        return null;
+      };
+
+      // Determine global time range from releases/expiries or paths
+      const allDates = [];
+      releases.forEach(d => d && allDates.push(toMs(d)));
+      expiries.forEach(d => d && allDates.push(toMs(d)));
+      const pathTimes = [];
+      normalizedPaths.forEach(path => {
+        path.forEach(seg => {
+          const s = toMs(seg.start);
+          const e = toMs(seg.end);
+          if (s !== null) pathTimes.push(s);
+          if (e !== null) pathTimes.push(e);
+        });
+      });
+      const validDates = allDates.filter(t => t !== null);
+      const minTime = Math.min(...pathTimes, ...validDates);
+      const maxTime = Math.max(...pathTimes, ...validDates);
+      console.log('spaghetti timing', { minTime, maxTime, pathTimes, validDates });
+      if (!Number.isFinite(minTime) || !Number.isFinite(maxTime) || minTime === maxTime) {
+        ctx.fillStyle = '#e5e7eb';
+        ctx.fillText('Insufficient time data for spaghetti plot', 12, 20);
+        return;
+      }
+      const timeToX = (ms) => {
+        if (maxTime === minTime) return width / 2;
+        const t = (ms - minTime) / (maxTime - minTime);
+        return padX + t * (width - 2 * padX);
+      };
+
+      const maxWeight = Math.max(...normalizedPaths.map(p => p[0]?.weight || 0), 1e-6);
+
+      const buildLines = (path) => {
+        const times = Array.from(new Set(path.flatMap(seg => [seg.start, seg.end].map(toMs).filter(t => t !== null)))).sort((a, b) => a - b);
+        if (times.length < 2) return null;
+        const segsByCompany = [[], [], []];
+        path.forEach(seg => {
+          const idx = (seg.company ?? 1) - 1;
+          if (!segsByCompany[idx]) segsByCompany[idx] = [];
+          segsByCompany[idx].push(seg);
+        });
+        const cumSeries = [[], [], []];
+        const cum = [0, 0, 0];
+        [0, 1, 2].forEach(ci => cumSeries[ci].push(0));
+        for (let i = 1; i < times.length; i++) {
+          const prev = times[i - 1];
+          const cur = times[i];
+          const durDays = (cur - prev) / 86400000;
+          [0, 1, 2].forEach(ci => {
+            const segs = segsByCompany[ci] || [];
+            const share = segs.find(s => toMs(s.start) <= prev && toMs(s.end) >= cur)?.share || 0;
+            cum[ci] += share * durDays;
+            cumSeries[ci].push(cum[ci]);
+          });
+        }
+        const totalFinal = (cumSeries[0].at(-1) || 0) + (cumSeries[1].at(-1) || 0) + (cumSeries[2].at(-1) || 0) || 1;
+        const lines = [[], [], []];
+        times.forEach((t, idx) => {
+          [0, 1, 2].forEach(ci => {
+            const pct = Math.min(100, (cumSeries[ci][idx] / totalFinal) * 100);
+            lines[ci].push({ x: timeToX(t), y: yZero - (pct / 100) * yRange });
+          });
+        });
+        return lines;
+      };
+
+      normalizedPaths.forEach(path => {
+        const alpha = Math.min(0.5, Math.max(0.05, (path[0].weight || 0) / maxWeight * 0.5));
+        const lines = buildLines(path);
+        if (!lines) return;
+        ctx.globalAlpha = alpha;
+        [0, 1, 2].forEach(ci => {
+          const pts = lines[ci];
+          if (!pts || pts.length === 0) return;
+          ctx.strokeStyle = colors[ci];
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+          ctx.stroke();
+        });
+      });
+      ctx.globalAlpha = 1;
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px Space Grotesk, sans-serif';
+      ctx.fillText('0%', 12, yZero + 12);
+      ctx.fillText('100%', 12, padTop + 4);
+      ctx.fillText(new Date(minTime).toISOString().slice(0, 10), padX - 6, yZero + 18);
+      ctx.fillText(new Date(maxTime).toISOString().slice(0, 10), width - padX - 80, yZero + 18);
     };
 
     const renderPlot = (scenarios, releases, expiries) => {
@@ -740,10 +975,14 @@
         setStatus('WebR still loading…');
         return;
       }
-      const { probs, releases, expiries } = readInputs();
+      const { probs, releases, expiries, cvs } = readInputs();
       const maxShareDays = Math.max(0, (new Date(expiries[0]).getTime() - new Date(releases[0]).getTime()) / 86400000);
       if (probs.some(p => isNaN(p) || p < 0 || p > 1)) {
         setStatus('Probabilities must be between 0 and 1.');
+        return;
+      }
+      if (cvs.some(c => isNaN(c) || c <= 0)) {
+        setStatus('Confidence CV must be positive numbers.');
         return;
       }
       if (releases.some(d => !d) || expiries.some(d => !d)) {
@@ -755,10 +994,14 @@
 
       const rCode = `
         p <- c(${probs.join(",")})
+        cv <- c(${cvs.join(",")})
         release <- as.Date(c(${releases.map(d => `"${d}"`).join(",")}))
         expiry <- as.Date(c(${expiries.map(d => `"${d}"`).join(",")}))
-        payload <- compute_scenarios(p, release, expiry)
-        serialize_payload(payload)
+        var_vec <- (cv * p) ^ 2
+        base_payload <- compute_scenarios(p, release, expiry)
+        sim <- simulate_ev(p, var_vec, release, expiry)
+        combined <- c(base_payload, sim)
+        serialize_payload(combined)
       `;
 
       const simplify = (node) => {
@@ -774,6 +1017,20 @@
           }
           if (type === 'character') {
             return values.length === 1 ? values[0] : values;
+          }
+          if (type === 'dataframe' && node.names && Array.isArray(values)) {
+            const cols = node.names;
+            const colData = values.map(simplify);
+            const len = Math.min(...colData.map(c => (Array.isArray(c) ? c.length : 0)));
+            const rows = [];
+            for (let i = 0; i < len; i++) {
+              const row = {};
+              cols.forEach((col, idx) => {
+                if (Array.isArray(colData[idx])) row[col] = colData[idx][i];
+              });
+              rows.push(row);
+            }
+            return rows;
           }
           if (type === 'list') {
             const mapped = values.map(simplify);
@@ -816,7 +1073,14 @@
       }
 
       const evPct = maxShareDays > 0 ? (jsData.expected_ev / maxShareDays) * 100 : 0;
-      evEl.textContent = `${evPct.toFixed(1)}% of max (max=${maxShareDays.toFixed(1)} share-days)`;
+      const ciLower = jsData.ci && jsData.ci[0] ? jsData.ci[0] : null;
+      const ciUpper = jsData.ci && jsData.ci[1] ? jsData.ci[1] : null;
+      const ciPctLower = ciLower !== null && maxShareDays > 0 ? (ciLower / maxShareDays) * 100 : null;
+      const ciPctUpper = ciUpper !== null && maxShareDays > 0 ? (ciUpper / maxShareDays) * 100 : null;
+      const ciText = ciPctLower !== null && ciPctUpper !== null
+        ? ` (95% CI: ${ciPctLower.toFixed(1)}%–${ciPctUpper.toFixed(1)}%)`
+        : '';
+      evEl.textContent = `${evPct.toFixed(1)}% of max (max=${maxShareDays.toFixed(1)} share-days)${ciText}`;
       renderScenarios(jsData.scenarios, maxShareDays);
 
       try {
@@ -832,7 +1096,7 @@
       runBtn.disabled = false;
       downloadBtn.disabled = false;
       lastResults = jsData;
-      lastInputs = { probs, releases, expiries, maxShareDays };
+      lastInputs = { probs, releases, expiries, maxShareDays, cvs };
     };
 
     const handleHover = (event) => {
@@ -904,17 +1168,25 @@
       const zip = new JSZip();
 
       // CSV: inputs + scenarios
-      const { probs, releases, expiries, maxShareDays } = lastInputs;
+      const { probs, releases, expiries, maxShareDays, cvs } = lastInputs;
       const lines = [];
       lines.push('Inputs');
-      lines.push('Company,SuccessProbability,ReleaseDate,ExpiryDate');
+      lines.push('Company,SuccessProbability,CoefficientOfVariation,ReleaseDate,ExpiryDate');
       ['A','B','C'].forEach((c,i)=>{
-        lines.push(`${c},${probs[i]},${releases[i]},${expiries[i]}`);
+        lines.push(`${c},${probs[i]},${cvs[i]},${releases[i]},${expiries[i]}`);
       });
       lines.push('');
       lines.push(`ExpectedEVShareDays,${lastResults.expected_ev}`);
       const evPct = maxShareDays > 0 ? (lastResults.expected_ev / maxShareDays) * 100 : 0;
       lines.push(`ExpectedEVPercentOfMax,${evPct}`);
+      if (lastResults.ci && lastResults.ci.length === 2) {
+        const ciPctLower = maxShareDays > 0 ? (lastResults.ci[0] / maxShareDays) * 100 : '';
+        const ciPctUpper = maxShareDays > 0 ? (lastResults.ci[1] / maxShareDays) * 100 : '';
+        lines.push(`CI95_Lower,${lastResults.ci[0]}`);
+        lines.push(`CI95_Upper,${lastResults.ci[1]}`);
+        lines.push(`CI95_LowerPercentOfMax,${ciPctLower}`);
+        lines.push(`CI95_UpperPercentOfMax,${ciPctUpper}`);
+      }
       lines.push('');
       lines.push('Scenarios');
       lines.push('Label,Probability,EV_ShareDays');
