@@ -179,6 +179,22 @@
       background: rgba(255,255,255,0.05);
       min-height: 260px;
     }
+    .tooltip {
+      position: fixed;
+      background: rgba(10,14,26,0.9);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: #f8fafc;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      pointer-events: none;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+      opacity: 0;
+      transition: opacity 0.1s ease;
+      z-index: 20;
+      max-width: 220px;
+      backdrop-filter: blur(6px);
+    }
     .pill {
       display: inline-block;
       padding: 4px 8px;
@@ -235,6 +251,7 @@
 
     <div class="actions">
       <button id="run">Compute EV &amp; Scenarios</button>
+      <button id="download" disabled>Download ZIP</button>
       <span class="status" id="status">WebR loading…</span>
     </div>
 
@@ -250,18 +267,25 @@
       <canvas id="plot" aria-label="Scenario plot generated in R via WebR"></canvas>
     </div>
   </div>
+  <div id="plotTooltip" class="tooltip"></div>
 
   <script type="module">
     import { WebR } from "https://webr.r-wasm.org/latest/webr.mjs";
+    import JSZip from "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm";
 
     const statusEl = document.getElementById('status');
     const evEl = document.getElementById('evValue');
     const scenarioList = document.getElementById('scenarioList');
     const plotEl = document.getElementById('plot');
     const runBtn = document.getElementById('run');
+    const downloadBtn = document.getElementById('download');
+    const tooltip = document.getElementById('plotTooltip');
 
     let webRReady = false;
     runBtn.disabled = true;
+    let plotState = null;
+    let lastResults = null;
+    let lastInputs = null;
 
     // Explicit baseUrl avoids 404s if the module path is rebased by the dev server.
     const webR = new WebR({ baseUrl: "https://webr.r-wasm.org/latest/" });
@@ -382,6 +406,128 @@
       setStatus('Ready');
     };
 
+    const buildCombinedCanvas = (scenarios, releases, expiries) => {
+      const valid = scenarios.filter(sc => sc.segments && sc.segments.length > 0);
+      const colors = ['#5f4b8b', '#3c9d9b', '#e67300'];
+      const colCount = 2;
+      const perHeight = 170;
+      const rows = Math.max(1, Math.ceil(valid.length / colCount));
+      const width = 900;
+      const height = rows * perHeight;
+      const canvas = document.createElement('canvas');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = 'rgba(12,16,30,0.95)';
+      ctx.fillRect(0, 0, width, height);
+
+      const padX = 60;
+      const padTop = 28;
+      const padBottom = 32;
+      const toMs = (d) => new Date(d).getTime();
+
+      valid.forEach((sc, idx) => {
+        const col = idx % colCount;
+        const row = Math.floor(idx / colCount);
+        const originX = col * (width / colCount);
+        const originY = row * perHeight;
+        const plotW = width / colCount;
+        const plotStartX = originX + padX;
+        const plotEndX = originX + plotW - padX;
+        const yZero = originY + perHeight - padBottom;
+        const yRange = perHeight - padTop - padBottom;
+
+        const times = Array.from(new Set(sc.segments.flatMap(seg => [seg.start, seg.end]))).sort((a, b) => toMs(a) - toMs(b));
+        if (times.length === 0) return;
+        const timesMs = times.map(toMs);
+        const minTime = Math.min(...timesMs);
+        const maxTime = Math.max(...timesMs);
+        const timeToX = (ms) => {
+          if (maxTime === minTime) return (plotStartX + plotEndX) / 2;
+          const t = (ms - minTime) / (maxTime - minTime);
+          return plotStartX + t * (plotEndX - plotStartX);
+        };
+
+        const segsByCompany = [[], [], []];
+        sc.segments.forEach(seg => {
+          const idx = (seg.company ?? 1) - 1;
+          if (!segsByCompany[idx]) segsByCompany[idx] = [];
+          segsByCompany[idx].push(seg);
+        });
+
+        const lines = [[], [], []];
+        const cumSeries = [[], [], []];
+        const shareSeries = [[], [], []];
+        const cum = [0, 0, 0];
+
+        const findShare = (compIdx, tStart, tEnd) => {
+          const segs = segsByCompany[compIdx] || [];
+          for (const seg of segs) {
+            if (toMs(seg.start) <= toMs(tStart) && toMs(seg.end) >= toMs(tEnd)) return seg.share;
+          }
+          return 0;
+        };
+
+        [0, 1, 2].forEach(ci => cumSeries[ci].push(0));
+        for (let i = 1; i < times.length; i++) {
+          const prev = times[i - 1];
+          const cur = times[i];
+          const durDays = (toMs(cur) - toMs(prev)) / 86400000;
+          [0, 1, 2].forEach(ci => {
+            const share = findShare(ci, prev, cur);
+            shareSeries[ci].push(share);
+            cum[ci] += share * durDays;
+            cumSeries[ci].push(cum[ci]);
+          });
+        }
+
+        const totalFinal = (cumSeries[0].at(-1) || 0) + (cumSeries[1].at(-1) || 0) + (cumSeries[2].at(-1) || 0);
+
+        times.forEach((tStr, i) => {
+          const total = totalFinal || 1;
+          [0, 1, 2].forEach(ci => {
+            const pct = total > 0 ? Math.min(100, (cumSeries[ci][i] / total) * 100) : 0;
+            lines[ci].push({ x: timeToX(toMs(tStr)), y: yZero - (pct / 100) * yRange });
+          });
+        });
+
+        ctx.fillStyle = '#e5e7eb';
+        ctx.font = '12px Space Grotesk, sans-serif';
+        ctx.fillText(`${sc.label} (p=${(sc.probability * 100).toFixed(1)}%)`, originX + 10, originY + 16);
+        ctx.strokeStyle = '#ffffff25';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(plotStartX, yZero);
+        ctx.lineTo(plotEndX, yZero);
+        ctx.stroke();
+
+        [0, 1, 2].forEach(ci => {
+          const pts = lines[ci];
+          if (!pts || pts.length === 0) return;
+          ctx.strokeStyle = colors[ci];
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+          ctx.stroke();
+        });
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('0%', originX + 12, yZero + 12);
+        ctx.fillText('100%', originX + 12, originY + padTop + 4);
+        const minDateStr = new Date(minTime).toISOString().slice(0, 10);
+        const maxDateStr = new Date(maxTime).toISOString().slice(0, 10);
+        ctx.fillText(minDateStr, plotStartX - 6, yZero + 16);
+        ctx.fillText(maxDateStr, plotEndX - 40, yZero + 16);
+      });
+
+      return canvas;
+    };
+
     const readInputs = () => {
       const cards = Array.from(document.querySelectorAll('[data-company]'));
       const probs = [];
@@ -409,7 +555,6 @@
         card.innerHTML = `
           <h4>${sc.label}</h4>
           <div class="meta">Probability: ${prob}% · Company A share: ${pct}% of max</div>
-          <div class="meta">Segments: ${sc.segments.length}</div>
         `;
         scenarioList.appendChild(card);
       });
@@ -459,6 +604,8 @@
         return Math.max(0, span);
       });
 
+      const plotsState = [];
+
       valid.forEach((sc, idx) => {
         const col = idx % colCount;
         const row = Math.floor(idx / colCount);
@@ -487,6 +634,7 @@
 
         // Build per-company cumulative percent lines.
         const times = Array.from(new Set(sc.segments.flatMap(seg => [seg.start, seg.end]))).sort((a, b) => toMs(a) - toMs(b));
+        const timesMs = times.map(toMs);
         const segsByCompany = [[], [], []];
         sc.segments.forEach(seg => {
           const idx = (seg.company ?? 1) - 1;
@@ -494,20 +642,9 @@
           segsByCompany[idx].push(seg);
         });
 
-        // Earliest expiry among successful companies defines the maximum possible window.
-        const scenarioCompanies = Array.from(new Set(sc.segments.map(seg => (seg.company ?? 1) - 1)));
-        const scenarioEndMs = Math.min(...scenarioCompanies.map(ci => {
-          const d = expiries[ci];
-          return d ? new Date(d).getTime() : Infinity;
-        }));
-        const maxShareDays = [0, 1, 2].map(ci => {
-          const rel = releases[ci];
-          if (!rel || !Number.isFinite(scenarioEndMs)) return 0;
-          const relMs = new Date(rel).getTime();
-          return Math.max(0, (scenarioEndMs - relMs) / 86400000);
-        });
-
         const lines = [[], [], []];
+        const cumSeries = [[], [], []];
+        const shareSeries = [[], [], []];
         const cum = [0, 0, 0];
 
         const findShare = (compIdx, tStart, tEnd) => {
@@ -520,18 +657,30 @@
           return 0;
         };
 
-        times.forEach((tStr, i) => {
-          if (i > 0) {
-            const prev = times[i - 1];
-            const durDays = (toMs(tStr) - toMs(prev)) / 86400000;
-            [0, 1, 2].forEach(ci => {
-              const share = findShare(ci, prev, tStr);
-              cum[ci] += share * durDays;
-            });
-          }
+        // Seed with time 0 cumulative
+        [0, 1, 2].forEach(ci => {
+          cumSeries[ci].push(0);
+        });
+
+        for (let i = 1; i < times.length; i++) {
+          const prev = times[i - 1];
+          const cur = times[i];
+          const durDays = (toMs(cur) - toMs(prev)) / 86400000;
           [0, 1, 2].forEach(ci => {
-            const maxDays = maxShareDays[ci];
-            const pct = maxDays > 0 ? Math.min(100, (cum[ci] / maxDays) * 100) : 0;
+            const share = findShare(ci, prev, cur);
+            shareSeries[ci].push(share);
+            cum[ci] += share * durDays;
+            cumSeries[ci].push(cum[ci]);
+          });
+        }
+
+        // Points for drawing lines
+        const totalSeries = times.map((_, i) => (cumSeries[0][i] || 0) + (cumSeries[1][i] || 0) + (cumSeries[2][i] || 0));
+        const totalFinal = totalSeries[totalSeries.length - 1] || 0;
+        times.forEach((tStr, i) => {
+          const total = totalFinal;
+          [0, 1, 2].forEach(ci => {
+            const pct = total > 0 ? Math.min(100, (cumSeries[ci][i] / total) * 100) : 0;
             lines[ci].push({ x: timeToX(toMs(tStr)), y: originY + yZero - (pct / 100) * yRange });
           });
         });
@@ -559,7 +708,31 @@
         const maxDateStr = new Date(maxTime).toISOString().slice(0, 10);
         ctx.fillText(minDateStr, plotStartX - 6, originY + yZero + 16);
         ctx.fillText(maxDateStr, plotEndX - 40, originY + yZero + 16);
+
+        plotsState.push({
+          originX,
+          originY,
+          plotStartX,
+          plotEndX,
+          width: plotW,
+          height: perHeight,
+          minTime,
+          maxTime,
+          timesMs,
+          cumSeries,
+          shareSeries,
+          totalSeries,
+          totalFinal,
+          label: sc.label
+        });
       });
+
+      plotState = {
+        plots: plotsState,
+        padTop,
+        padBottom,
+        colors
+      };
     };
 
     const runModel = async () => {
@@ -657,8 +830,234 @@
 
       setStatus('Updated');
       runBtn.disabled = false;
+      downloadBtn.disabled = false;
+      lastResults = jsData;
+      lastInputs = { probs, releases, expiries, maxShareDays };
     };
 
+    const handleHover = (event) => {
+      if (!plotState || !plotState.plots) return;
+      const rect = plotEl.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const plot = plotState.plots.find(p =>
+        x >= p.originX && x <= p.originX + p.width &&
+        y >= p.originY && y <= p.originY + p.height
+      );
+      if (!plot) {
+        tooltip.style.opacity = 0;
+        return;
+      }
+      const { plotStartX, plotEndX, minTime, maxTime, timesMs, cumSeries, shareSeries, totalSeries, totalFinal, label } = plot;
+      const tRatio = Math.max(0, Math.min(1, (x - plotStartX) / (plotEndX - plotStartX)));
+      const timeMs = minTime + tRatio * (maxTime - minTime);
+
+      const getPct = (ci) => {
+        const times = timesMs;
+        const cum = cumSeries[ci] || [];
+        const shares = shareSeries[ci] || [];
+        const totals = totalSeries || [];
+        const totalTarget = totalFinal || (totals.length ? totals[totals.length - 1] : 0);
+        if (!times || times.length === 0) return 0;
+        let idx = times.findIndex(t => timeMs < t);
+        if (idx === -1) idx = times.length;
+        if (idx === 0) return 0;
+        const startMs = times[idx - 1];
+        const endMs = times[idx] ?? times[idx - 1];
+        const spanMs = Math.max(1, endMs - startMs);
+        const deltaDays = (timeMs - startMs) / 86400000;
+        const baseCum = cum[idx - 1] ?? 0;
+        const share = shares[idx - 1] ?? 0;
+        const totalPrev = totals[idx - 1] ?? 0;
+        const totalNext = totals[idx] ?? totals[totals.length - 1] ?? totalPrev;
+        const frac = Math.max(0, Math.min(1, (timeMs - startMs) / spanMs));
+        const total = Math.max(0.000001, totalTarget); // normalize to final total only
+        const pct = ((baseCum + share * deltaDays) / total) * 100;
+        return Math.max(0, Math.min(100, pct));
+      };
+
+      const dateStr = new Date(timeMs).toISOString().slice(0, 10);
+      const lines = [0, 1, 2].map(ci => ({
+        name: ['A', 'B', 'C'][ci],
+        pct: getPct(ci)
+      }));
+
+      tooltip.innerHTML = `
+        <div style="font-weight:700;margin-bottom:4px;">${label}</div>
+        <div style="color:#94a3b8;">Date: ${dateStr}</div>
+        ${lines.map(l => `<div><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${plotState.colors[l.name === 'A' ? 0 : l.name === 'B' ? 1 : 2]};margin-right:6px;"></span>${l.name}: ${l.pct.toFixed(1)}%</div>`).join('')}
+      `;
+      tooltip.style.left = `${event.clientX + 12}px`;
+      tooltip.style.top = `${event.clientY + 12}px`;
+      tooltip.style.opacity = 1;
+    };
+
+    plotEl.addEventListener('mousemove', handleHover);
+    plotEl.addEventListener('mouseleave', () => { tooltip.style.opacity = 0; });
+    downloadBtn.addEventListener('click', async () => {
+      if (!lastResults || !lastInputs) {
+        setStatus('Run the model first.');
+        return;
+      }
+      downloadBtn.disabled = true;
+      setStatus('Preparing ZIP…');
+      const zip = new JSZip();
+
+      // CSV: inputs + scenarios
+      const { probs, releases, expiries, maxShareDays } = lastInputs;
+      const lines = [];
+      lines.push('Inputs');
+      lines.push('Company,SuccessProbability,ReleaseDate,ExpiryDate');
+      ['A','B','C'].forEach((c,i)=>{
+        lines.push(`${c},${probs[i]},${releases[i]},${expiries[i]}`);
+      });
+      lines.push('');
+      lines.push(`ExpectedEVShareDays,${lastResults.expected_ev}`);
+      const evPct = maxShareDays > 0 ? (lastResults.expected_ev / maxShareDays) * 100 : 0;
+      lines.push(`ExpectedEVPercentOfMax,${evPct}`);
+      lines.push('');
+      lines.push('Scenarios');
+      lines.push('Label,Probability,EV_ShareDays');
+      lastResults.scenarios.forEach(sc=>{
+        lines.push(`${sc.label},${sc.probability},${sc.ev1}`);
+      });
+      zip.file('results.csv', lines.join('\n'));
+
+      // Graphs: one PNG per scenario with segments
+      const colors = ['#5f4b8b', '#3c9d9b', '#e67300'];
+      const toMs = (d) => new Date(d).getTime();
+
+      const drawScenarioCanvas = (sc) => {
+        const canvas = document.createElement('canvas');
+        const width = 900;
+        const height = 220;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+        ctx.fillStyle = 'rgba(12,16,30,0.95)';
+        ctx.fillRect(0,0,width,height);
+        ctx.strokeStyle = '#ffffff20';
+        ctx.lineWidth = 1;
+
+        if (!sc.segments || sc.segments.length === 0) {
+          ctx.fillStyle = '#e5e7eb';
+          ctx.fillText('No market activity', 12, 20);
+          return canvas;
+        }
+
+        const times = Array.from(new Set(sc.segments.flatMap(seg => [seg.start, seg.end]))).sort((a,b)=>toMs(a)-toMs(b));
+        const timesMs = times.map(toMs);
+        const segsByCompany = [[],[],[]];
+        sc.segments.forEach(seg=>{
+          const idx = (seg.company ?? 1) -1;
+          if (!segsByCompany[idx]) segsByCompany[idx]=[];
+          segsByCompany[idx].push(seg);
+        });
+
+        const linesLocal = [[],[],[]];
+        const cumSeries = [[],[],[]];
+        const shareSeries = [[],[],[]];
+        const cum = [0,0,0];
+
+        const findShare = (compIdx, tStart, tEnd) => {
+          const segs = segsByCompany[compIdx] || [];
+          for (const seg of segs) {
+            if (toMs(seg.start) <= toMs(tStart) && toMs(seg.end) >= toMs(tEnd)) return seg.share;
+          }
+          return 0;
+        };
+
+        [0,1,2].forEach(ci=>cumSeries[ci].push(0));
+        for(let i=1;i<times.length;i++){
+          const prev=times[i-1], cur=times[i];
+          const durDays=(toMs(cur)-toMs(prev))/86400000;
+          [0,1,2].forEach(ci=>{
+            const share=findShare(ci, prev, cur);
+            shareSeries[ci].push(share);
+            cum[ci]+=share*durDays;
+            cumSeries[ci].push(cum[ci]);
+          });
+        }
+
+        const totalFinal = (cumSeries[0].at(-1)||0)+(cumSeries[1].at(-1)||0)+(cumSeries[2].at(-1)||0);
+        const padX=60, padTop=28, padBottom=32;
+        const plotStartX=padX, plotEndX=width-padX;
+        const yZero=height-padBottom, yRange=height-padTop-padBottom;
+        const minTime=Math.min(...timesMs), maxTime=Math.max(...timesMs);
+        const timeToX=(ms)=> {
+          if (maxTime===minTime) return (plotStartX+plotEndX)/2;
+          const t=(ms-minTime)/(maxTime-minTime);
+          return plotStartX + t*(plotEndX-plotStartX);
+        };
+
+        times.forEach((tStr,i)=>{
+          const total=totalFinal||1;
+          [0,1,2].forEach(ci=>{
+            const pct= total>0 ? Math.min(100,(cumSeries[ci][i]/total)*100):0;
+            linesLocal[ci].push({x: timeToX(toMs(tStr)), y: yZero - (pct/100)*yRange});
+          });
+        });
+
+        ctx.fillStyle='#e5e7eb';
+        ctx.fillText(`${sc.label} (p=${(sc.probability*100).toFixed(1)}%)`,12,18);
+        ctx.strokeStyle='#ffffff25';
+        ctx.beginPath(); ctx.moveTo(plotStartX,yZero); ctx.lineTo(plotEndX,yZero); ctx.stroke();
+
+        [0,1,2].forEach(ci=>{
+          const pts=linesLocal[ci];
+          if (!pts || pts.length===0) return;
+          ctx.strokeStyle=colors[ci];
+          ctx.lineWidth=3;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          pts.slice(1).forEach(p=>ctx.lineTo(p.x,p.y));
+          ctx.stroke();
+        });
+
+        ctx.fillStyle='#94a3b8';
+        ctx.fillText('0%', 12, yZero+12);
+        ctx.fillText('100%', 12, padTop+4);
+        const minDateStr=new Date(minTime).toISOString().slice(0,10);
+        const maxDateStr=new Date(maxTime).toISOString().slice(0,10);
+        ctx.fillText(minDateStr, plotStartX-6, yZero+16);
+        ctx.fillText(maxDateStr, plotEndX-40, yZero+16);
+
+        return canvas;
+      };
+
+      const imgFolder = zip.folder('graphs');
+      for (const sc of lastResults.scenarios) {
+        if (!sc.segments || sc.segments.length === 0) continue;
+        const canvas = drawScenarioCanvas(sc);
+        const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+        if (blob) {
+          const buf = await blob.arrayBuffer();
+          imgFolder.file(`${sc.label || 'scenario'}.png`, buf);
+        }
+      }
+
+      // Combined graph file
+      const combinedCanvas = buildCombinedCanvas(lastResults.scenarios, releases, expiries);
+      const combinedBlob = await new Promise(res => combinedCanvas.toBlob(res, 'image/png'));
+      if (combinedBlob) {
+        const buf = await combinedBlob.arrayBuffer();
+        imgFolder.file('all-scenarios.png', buf);
+      }
+
+      const content = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(content);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'pharma-results.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus('ZIP downloaded');
+      downloadBtn.disabled = false;
+    });
     runBtn.addEventListener('click', runModel);
     initWebR();
   </script>
