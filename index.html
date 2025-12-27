@@ -240,14 +240,14 @@
 
     <div class="ev-card">
       <div class="ev-value" id="evValue">—</div>
-      <div class="ev-note">Expected market share for Company A (share-days, weighted by probabilities). Also shown in years for intuition.</div>
+      <div class="ev-note">Expected market share for Company A as a percent of its maximum possible share-days (A succeeds alone from its release to its expiry).</div>
     </div>
 
     <div class="scenario-list" id="scenarioList"></div>
 
     <div class="plot-area">
       <h3>All market share timelines</h3>
-      <img id="plot" alt="Scenario plot generated in R via WebR" />
+      <canvas id="plot" aria-label="Scenario plot generated in R via WebR"></canvas>
     </div>
   </div>
 
@@ -260,8 +260,12 @@
     const plotEl = document.getElementById('plot');
     const runBtn = document.getElementById('run');
 
-    const webR = new WebR();
-    const shelter = new webR.RCodeShelter();
+    let webRReady = false;
+    runBtn.disabled = true;
+
+    // Explicit baseUrl avoids 404s if the module path is rebased by the dev server.
+    const webR = new WebR({ baseUrl: "https://webr.r-wasm.org/latest/" });
+    // Shelter is available, but we can use direct helpers for simplicity.
 
     const setStatus = (msg) => statusEl.textContent = msg;
 
@@ -373,6 +377,8 @@
       setStatus('Starting WebR…');
       await webR.init();
       await webR.evalRVoid(bootstrapR);
+      webRReady = true;
+      runBtn.disabled = false;
       setStatus('Ready');
     };
 
@@ -392,24 +398,177 @@
       return { probs, releases, expiries };
     };
 
-    const renderScenarios = (scenarios) => {
+    const renderScenarios = (scenarios, maxShareDays) => {
       scenarioList.innerHTML = '';
+      const norm = maxShareDays > 0 ? maxShareDays : 1;
       scenarios.forEach((sc) => {
         const card = document.createElement('div');
         card.className = 'scenario-card';
         const prob = (sc.probability * 100).toFixed(1);
-        const evText = sc.ev1.toFixed(1);
+        const pct = ((sc.ev1 / norm) * 100).toFixed(1);
         card.innerHTML = `
           <h4>${sc.label}</h4>
-          <div class="meta">Probability: ${prob}% · Company A share: ${evText} share-days</div>
+          <div class="meta">Probability: ${prob}% · Company A share: ${pct}% of max</div>
           <div class="meta">Segments: ${sc.segments.length}</div>
         `;
         scenarioList.appendChild(card);
       });
     };
 
+    const renderPlot = (scenarios, releases, expiries) => {
+      const canvas = plotEl;
+      const ctx = canvas.getContext('2d');
+      const valid = scenarios.filter(sc => sc.segments && sc.segments.length > 0);
+      const colors = ['#5f4b8b', '#3c9d9b', '#e67300'];
+      const colCount = 2;
+      const perHeight = 150;
+      const rows = Math.max(1, Math.ceil(valid.length / colCount));
+      const width = canvas.clientWidth || canvas.parentElement.clientWidth || 920;
+      const height = rows * perHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.height = `${height}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.font = '12px Space Grotesk, sans-serif';
+      ctx.fillStyle = '#e5e7eb';
+
+      if (valid.length === 0) {
+        ctx.fillText('No market activity to plot', 12, 24);
+        return;
+      }
+
+      const toMs = (d) => new Date(d).getTime();
+      const allStarts = valid.flatMap(sc => sc.segments.map(seg => toMs(seg.start)));
+      const allEnds = valid.flatMap(sc => sc.segments.map(seg => toMs(seg.end)));
+      const minTime = Math.min(...allStarts);
+      const maxTime = Math.max(...allEnds);
+
+      const plotW = width / colCount;
+      const padX = 60;
+      const padTop = 28;
+      const padBottom = 30;
+      const yZero = perHeight - padBottom;
+      const yRange = perHeight - padTop - padBottom;
+
+      // Precompute best-case share-days per company for normalization.
+      const maxShareDays = [0, 0, 0].map((_, i) => {
+        if (!releases[i] || !expiries[i]) return 0;
+        const span = (new Date(expiries[i]).getTime() - new Date(releases[i]).getTime()) / 86400000;
+        return Math.max(0, span);
+      });
+
+      valid.forEach((sc, idx) => {
+        const col = idx % colCount;
+        const row = Math.floor(idx / colCount);
+        const originX = col * plotW;
+        const originY = row * perHeight;
+        const plotStartX = originX + padX;
+        const plotEndX = originX + plotW - padX;
+
+        const timeToX = (ms) => {
+          if (maxTime === minTime) return (plotStartX + plotEndX) / 2;
+          const t = (ms - minTime) / (maxTime - minTime);
+          return plotStartX + t * (plotEndX - plotStartX);
+        };
+
+        // Title
+        ctx.fillStyle = '#e5e7eb';
+        ctx.fillText(`${sc.label} (p=${(sc.probability * 100).toFixed(1)}%)`, originX + 10, originY + 16);
+
+        // Axis
+        ctx.strokeStyle = '#ffffff25';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(plotStartX, originY + yZero);
+        ctx.lineTo(plotEndX, originY + yZero);
+        ctx.stroke();
+
+        // Build per-company cumulative percent lines.
+        const times = Array.from(new Set(sc.segments.flatMap(seg => [seg.start, seg.end]))).sort((a, b) => toMs(a) - toMs(b));
+        const segsByCompany = [[], [], []];
+        sc.segments.forEach(seg => {
+          const idx = (seg.company ?? 1) - 1;
+          if (!segsByCompany[idx]) segsByCompany[idx] = [];
+          segsByCompany[idx].push(seg);
+        });
+
+        // Earliest expiry among successful companies defines the maximum possible window.
+        const scenarioCompanies = Array.from(new Set(sc.segments.map(seg => (seg.company ?? 1) - 1)));
+        const scenarioEndMs = Math.min(...scenarioCompanies.map(ci => {
+          const d = expiries[ci];
+          return d ? new Date(d).getTime() : Infinity;
+        }));
+        const maxShareDays = [0, 1, 2].map(ci => {
+          const rel = releases[ci];
+          if (!rel || !Number.isFinite(scenarioEndMs)) return 0;
+          const relMs = new Date(rel).getTime();
+          return Math.max(0, (scenarioEndMs - relMs) / 86400000);
+        });
+
+        const lines = [[], [], []];
+        const cum = [0, 0, 0];
+
+        const findShare = (compIdx, tStart, tEnd) => {
+          const segs = segsByCompany[compIdx] || [];
+          for (const seg of segs) {
+            if (toMs(seg.start) <= toMs(tStart) && toMs(seg.end) >= toMs(tEnd)) {
+              return seg.share;
+            }
+          }
+          return 0;
+        };
+
+        times.forEach((tStr, i) => {
+          if (i > 0) {
+            const prev = times[i - 1];
+            const durDays = (toMs(tStr) - toMs(prev)) / 86400000;
+            [0, 1, 2].forEach(ci => {
+              const share = findShare(ci, prev, tStr);
+              cum[ci] += share * durDays;
+            });
+          }
+          [0, 1, 2].forEach(ci => {
+            const maxDays = maxShareDays[ci];
+            const pct = maxDays > 0 ? Math.min(100, (cum[ci] / maxDays) * 100) : 0;
+            lines[ci].push({ x: timeToX(toMs(tStr)), y: originY + yZero - (pct / 100) * yRange });
+          });
+        });
+
+        // Draw lines per company
+        [0, 1, 2].forEach(ci => {
+          const pts = lines[ci];
+          if (!pts || pts.length === 0) return;
+          ctx.strokeStyle = colors[ci];
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          pts.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+          ctx.stroke();
+        });
+
+        // Y-axis labels
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('0%', originX + 12, originY + yZero + 12);
+        ctx.fillText('100%', originX + 12, originY + padTop + 4);
+
+        // Ticks (start/end)
+        ctx.fillStyle = '#94a3b8';
+        const minDateStr = new Date(minTime).toISOString().slice(0, 10);
+        const maxDateStr = new Date(maxTime).toISOString().slice(0, 10);
+        ctx.fillText(minDateStr, plotStartX - 6, originY + yZero + 16);
+        ctx.fillText(maxDateStr, plotEndX - 40, originY + yZero + 16);
+      });
+    };
+
     const runModel = async () => {
+      if (!webRReady) {
+        setStatus('WebR still loading…');
+        return;
+      }
       const { probs, releases, expiries } = readInputs();
+      const maxShareDays = Math.max(0, (new Date(expiries[0]).getTime() - new Date(releases[0]).getTime()) / 86400000);
       if (probs.some(p => isNaN(p) || p < 0 || p > 1)) {
         setStatus('Probabilities must be between 0 and 1.');
         return;
@@ -429,24 +588,72 @@
         serialize_payload(payload)
       `;
 
-      const payload = await shelter.evalR(rCode);
-      const jsData = await payload.toJs();
+      const simplify = (node) => {
+        if (node === null || node === undefined) return null;
+        if (Array.isArray(node)) return node.map(simplify);
+        if (typeof node === 'object' && 'type' in node && 'values' in node) {
+          const { type, values, names } = node;
+          if (type === 'double' || type === 'integer') {
+            return values.length === 1 ? values[0] : values;
+          }
+          if (type === 'logical') {
+            return values.length === 1 ? !!values[0] : values.map(Boolean);
+          }
+          if (type === 'character') {
+            return values.length === 1 ? values[0] : values;
+          }
+          if (type === 'list') {
+            const mapped = values.map(simplify);
+            if (names && names.length === values.length && names.some(Boolean)) {
+              const obj = {};
+              mapped.forEach((val, i) => {
+                const key = names[i] || i;
+                obj[key] = val;
+              });
+              return obj;
+            }
+            return mapped;
+          }
+        }
+        if (typeof node === 'object') {
+          const obj = {};
+          for (const [k, v] of Object.entries(node)) obj[k] = simplify(v);
+          return obj;
+        }
+        return node;
+      };
 
-      evEl.textContent = \`\${jsData.expected_ev.toFixed(1)} share-days (\${jsData.expected_years.toFixed(2)} years)\`;
-      renderScenarios(jsData.scenarios);
+      let jsData = null;
+      try {
+        const payload = await webR.evalR(rCode);
+        const jsRaw = await payload.toJs();
+        jsData = simplify(jsRaw);
+      } catch (err) {
+        console.error('WebR eval error', err);
+        setStatus('Error running R code; see console.');
+        runBtn.disabled = false;
+        return;
+      }
 
-      const plotCode = `
-        p <- c(${probs.join(",")})
-        release <- as.Date(c(${releases.map(d => `"${d}"`).join(",")}))
-        expiry <- as.Date(c(${expiries.map(d => `"${d}"`).join(",")}))
-        payload <- compute_scenarios(p, release, expiry)
-        plot_scenarios(payload)
-      `;
+      if (!jsData || typeof jsData.expected_ev !== 'number') {
+        console.error('Unexpected payload from WebR', jsData);
+        setStatus('Unexpected result from R; see console.');
+        runBtn.disabled = false;
+        return;
+      }
 
-      const plot = await shelter.captureRPlot(plotCode);
-      const plotBlob = await plot.toBlob();
-      const plotUrl = URL.createObjectURL(plotBlob);
-      plotEl.src = plotUrl;
+      const evPct = maxShareDays > 0 ? (jsData.expected_ev / maxShareDays) * 100 : 0;
+      evEl.textContent = `${evPct.toFixed(1)}% of max (max=${maxShareDays.toFixed(1)} share-days)`;
+      renderScenarios(jsData.scenarios, maxShareDays);
+
+      try {
+        renderPlot(jsData.scenarios, releases, expiries);
+      } catch (err) {
+        console.error('Plot render failed', err);
+        setStatus('EV computed; plot render failed (see console).');
+        runBtn.disabled = false;
+        return;
+      }
 
       setStatus('Updated');
       runBtn.disabled = false;
